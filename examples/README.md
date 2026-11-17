@@ -215,6 +215,7 @@ Example | Description
 Example | Description
 --- | ---
 [Agent Loop](../examples/ai/agent.rs) | A tiny coding agent: sessions, model turns, and tool calls as entities and components
+[Coding Agent](../examples/ai/coding_agent.rs) | A coding agent in your terminal, built with bevy_agent and the built-in tools
 [LLM Chat](../examples/ai/chat.rs) | Stream one reply from an LLM endpoint with bevy_sampler
 
 ### Animation

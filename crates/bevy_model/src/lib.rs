@@ -49,6 +49,7 @@ use bevy_platform::collections::HashMap;
 
 plugin_group! {
     /// The model registry and every model this crate knows about:
+    #[derive(Default)]
     pub struct DefaultModels {
         :ModelPlugin,
         :XaiModelsPlugin,

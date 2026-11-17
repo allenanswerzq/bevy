@@ -70,14 +70,13 @@ async fn run(args: Args) -> io::Result<String> {
         .or(timed_out)
         .await?;
 
-    let status = if output.status.success() {
-        String::new()
-    } else {
-        format!("\n[{}]", output.status)
-    };
-    Ok(format!(
-        "{}{}{status}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    ))
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    if !output.status.success() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&format!("[{}]", output.status));
+    }
+    Ok(text)
 }

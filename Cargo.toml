@@ -809,6 +809,7 @@ bevy_image = { path = "crates/bevy_image", version = "0.20.0-dev", default-featu
 bevy_reflect = { path = "crates/bevy_reflect", version = "0.20.0-dev", default-features = false }
 bevy_render = { path = "crates/bevy_render", version = "0.20.0-dev", default-features = false }
 bevy-settings = { path = "crates/bevy_settings", version = "0.20.0-dev", default-features = false }
+bevy_agent = { path = "crates/bevy_agent" }
 bevy_model = { path = "crates/bevy_model" }
 bevy_sampler = { path = "crates/bevy_sampler" }
 bevy_tool = { path = "crates/bevy_tool" }
@@ -1789,6 +1790,17 @@ doc-scrape-examples = true
 [package.metadata.example.chat]
 name = "LLM Chat"
 description = "Stream one reply from an LLM endpoint with bevy_sampler"
+category = "AI"
+wasm = false
+
+[[example]]
+name = "coding_agent"
+path = "examples/ai/coding_agent.rs"
+doc-scrape-examples = true
+
+[package.metadata.example.coding_agent]
+name = "Coding Agent"
+description = "A coding agent in your terminal, built with bevy_agent and the built-in tools"
 category = "AI"
 wasm = false
 

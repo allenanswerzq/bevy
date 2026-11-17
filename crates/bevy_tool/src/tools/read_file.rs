@@ -75,8 +75,7 @@ fn read(args: Args) -> io::Result<String> {
     let next = start + limit;
     if next <= total {
         out.push_str(&format!(
-            "[{} more lines; read on with offset {next}]",
-            total + 1 - next
+            "[lines {next} to {total} not shown; read on with offset {next}]"
         ));
     }
     Ok(out)

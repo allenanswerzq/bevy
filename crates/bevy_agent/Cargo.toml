@@ -1,0 +1,20 @@
+[package]
+name = "bevy_agent"
+version = "0.20.0-dev"
+edition = "2024"
+description = "LLM agents that call tools in a loop, as Bevy entities"
+homepage = "https://bevy.org"
+repository = "https://github.com/bevyengine/bevy"
+license = "MIT OR Apache-2.0"
+keywords = ["bevy", "llm", "agent"]
+publish = false
+
+[dependencies]
+bevy_app = { path = "../bevy_app", version = "0.20.0-dev" }
+bevy_ecs = { path = "../bevy_ecs", version = "0.20.0-dev" }
+bevy_model = { path = "../bevy_model", version = "0.20.0-dev" }
+bevy_sampler = { path = "../bevy_sampler", version = "0.20.0-dev" }
+bevy_tool = { path = "../bevy_tool", version = "0.20.0-dev" }
+
+[lints]
+workspace = true

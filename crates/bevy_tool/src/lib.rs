@@ -71,6 +71,7 @@ use serde_json::Value;
 
 plugin_group! {
     /// The tool runner and every built-in tool:
+    #[derive(Default)]
     pub struct DefaultTools {
         :ToolPlugin,
         tools:::BashPlugin,
