@@ -3,7 +3,7 @@
 use bevy_tool::ToolCall;
 use serde_json::{json, Value};
 
-use super::{count, openai_tool_choice, put, stream_error, text, Chunk};
+use super::{count, openai_cache, openai_tool_choice, put, stream_error, text, Chunk};
 use crate::{Delta, Item, Part, Reasoning, Request, SampleError, StopReason, Usage};
 
 pub(super) fn encode(model: &str, request: &Request) -> Value {
@@ -104,11 +104,7 @@ pub(super) fn encode(model: &str, request: &Request) -> Value {
     put(&mut body, "max_output_tokens", request.max_output_tokens);
     put(&mut body, "temperature", request.temperature);
     put(&mut body, "top_p", request.top_p);
-    put(
-        &mut body,
-        "prompt_cache_key",
-        request.prompt_cache_key.clone(),
-    );
+    openai_cache(&mut body, request);
     body
 }
 
@@ -192,13 +188,14 @@ pub(super) fn decode(event: &Value, out: &mut Vec<Chunk>) -> Result<(), SampleEr
                 cache_creation: 0,
                 cost_usd_ticks: usage["cost_in_usd_ticks"].as_i64(),
             }));
-            out.push(Chunk::Stop(
-                match response["incomplete_details"]["reason"].as_str() {
-                    Some("max_output_tokens") => StopReason::Length,
-                    Some("content_filter") => StopReason::ContentFilter,
-                    _ => StopReason::Stop,
-                },
-            ));
+            let reason = text(&response["incomplete_details"]["reason"]);
+            let stop = match reason.as_deref() {
+                Some("max_output_tokens") => StopReason::Length,
+                Some("content_filter") => StopReason::ContentFilter,
+                _ => StopReason::Stop,
+            };
+            let raw = reason.or_else(|| text(&response["status"]));
+            out.push(Chunk::Stop(stop, raw.unwrap_or_default()));
             doom_loop(&response["doom_loop_check"], out);
             out.push(Chunk::Done);
         }
@@ -228,6 +225,7 @@ fn reasoning(item: &Value) -> Reasoning {
             content
         },
         signature: text(&item["encrypted_content"]),
+        model: None,
     }
 }
 
@@ -309,7 +307,8 @@ mod tests {
             [Reasoning {
                 id: Some("rs".into()),
                 text: "hm".into(),
-                signature: Some("enc".into())
+                signature: Some("enc".into()),
+                model: None,
             }]
         );
         assert_eq!(response.hosted.len(), 1);

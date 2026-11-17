@@ -4,7 +4,9 @@ use bevy_tool::ToolChoice;
 use serde_json::{json, Value};
 
 use super::{count, stream_error, text, Chunk};
-use crate::{Delta, Item, Part, Reasoning, Request, SampleError, StopReason, Usage};
+use crate::{
+    CacheRetention, Delta, Item, Part, Reasoning, Request, SampleError, StopReason, Usage,
+};
 
 const DEFAULT_MAX_TOKENS: u64 = 128_000;
 
@@ -73,23 +75,26 @@ pub(super) fn encode(model: &str, request: &Request) -> Value {
 
     // Cache the system prompt, the whole conversation, and the conversation
     // as of the previous turn, so the next request can reuse either prefix.
-    let mark = |message: Option<&mut Value>| {
-        if let Some(block) = message.and_then(|m| m["content"].as_array_mut()?.last_mut()) {
-            block["cache_control"] = json!({"type": "ephemeral"});
+    let cache = match request.cache {
+        CacheRetention::Off => None,
+        CacheRetention::Short => Some(json!({"type": "ephemeral"})),
+        CacheRetention::Long => Some(json!({"type": "ephemeral", "ttl": "1h"})),
+    };
+    let mark = |block: Option<&mut Value>| {
+        if let (Some(block), Some(cache)) = (block, &cache) {
+            block["cache_control"] = cache.clone();
         }
     };
-    if let Some(last) = system.last_mut() {
-        last["cache_control"] = json!({"type": "ephemeral"});
-    }
+    mark(system.last_mut());
     if let Some(tip) = messages.len().checked_sub(1) {
         let previous_user = messages[..tip]
             .iter()
             .rposition(|m| m["role"] == "assistant")
             .and_then(|a| messages[..a].iter().rposition(|m| m["role"] == "user"));
         if let Some(user) = previous_user {
-            mark(messages.get_mut(user));
+            mark(last_block(messages.get_mut(user)));
         }
-        mark(messages.get_mut(tip));
+        mark(last_block(messages.get_mut(tip)));
     }
 
     let mut body = json!({
@@ -134,6 +139,11 @@ pub(super) fn encode(model: &str, request: &Request) -> Value {
     body
 }
 
+/// The last content block of a message.
+fn last_block(message: Option<&mut Value>) -> Option<&mut Value> {
+    message?["content"].as_array_mut()?.last_mut()
+}
+
 fn block(part: &Part) -> Option<Value> {
     match part {
         Part::Text(text) if text.is_empty() => None,
@@ -153,9 +163,11 @@ fn block(part: &Part) -> Option<Value> {
     }
 }
 
-/// Anthropic ids allow only `[a-zA-Z0-9_-]`.
+/// Anthropic ids allow only `[a-zA-Z0-9_-]`, up to 64 of them. Calls and
+/// results go through the same function, so they still match.
 fn tool_id(id: &str) -> String {
     id.chars()
+        .take(64)
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' {
                 c
@@ -258,12 +270,13 @@ pub(super) fn decode(
         },
         "message_delta" => {
             if let Some(reason) = delta["stop_reason"].as_str() {
-                out.push(Chunk::Stop(match reason {
+                let stop = match reason {
                     "max_tokens" => StopReason::Length,
                     "tool_use" => StopReason::ToolCalls,
                     "refusal" => StopReason::ContentFilter,
                     _ => StopReason::Stop,
-                }));
+                };
+                out.push(Chunk::Stop(stop, reason.into()));
             }
             out.push(Chunk::Usage(usage(&event["usage"])));
         }
@@ -405,7 +418,8 @@ mod tests {
             [Reasoning {
                 id: None,
                 text: "hmm".into(),
-                signature: Some("sig".into())
+                signature: Some("sig".into()),
+                model: None,
             }]
         );
         assert_eq!(response.text, "ok");
@@ -463,6 +477,7 @@ mod tests {
                 id: None,
                 text: "hm".into(),
                 signature: Some("s".into()),
+                model: None,
             }),
             Item::Assistant {
                 text: String::new(),

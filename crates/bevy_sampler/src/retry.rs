@@ -73,13 +73,11 @@ pub(crate) fn decide(
     }
     let rate_limited = status == Some(429);
     let retry_after = match error {
-        SampleError::Status {
-            retry_after,
-            should_retry,
-            ..
-        } => {
+        SampleError::Status { retry_after, .. } => {
             let size_veto = error.is_context_length() && !(rate_limited && retry_after.is_some());
-            if *should_retry == Some(false) || size_veto {
+            // A wait longer than the policy allows fails now; the error keeps the wait.
+            let too_long = retry_after.is_some_and(|wait| wait > policy.max_server_delay);
+            if size_veto || too_long {
                 return Decision::Fail;
             }
             *retry_after
@@ -116,11 +114,25 @@ pub(crate) fn decide(
     retry(delay, stripped)
 }
 
-/// Check a response that streamed to the end.
+/// Check a response that streamed to the end. `context_window` catches
+/// servers that cut the input to fit without saying so.
 pub(crate) fn verdict(
     mut response: Response,
     policy: LengthPolicy,
+    context_window: Option<u64>,
 ) -> Result<Response, SampleError> {
+    let usage = response.usage;
+    let length = response.stop_reason == StopReason::Length;
+    if let Some(window) = context_window {
+        let over = !length && usage.prompt > window;
+        let filled = length && usage.completion == 0 && usage.prompt * 100 >= window * 99;
+        if over || filled {
+            return Err(SampleError::ContextOverflow {
+                input: usage.prompt,
+                window,
+            });
+        }
+    }
     let valid = |args: &str| {
         args.trim().is_empty() || serde_json::from_str::<serde_json::Value>(args).is_ok()
     };
@@ -194,9 +206,17 @@ mod tests {
             (status(503, "", None), 2, secs(8)),
             (status(503, "", None), 15, Decision::Fail),
             (status(526, "", None), 0, Decision::Fail),
+            (status(408, "", None), 0, secs(2)),
+            (status(409, "", None), 0, secs(2)),
             (status(429, "", Some(7)), 0, secs(7)),
+            (status(429, "", Some(61)), 0, Decision::Fail),
             (status(429, "", None), 1, Decision::Fail),
             (status(400, "prompt is too long", None), 0, Decision::Fail),
+            (
+                status(503, "exceeds the limit of 128000", None),
+                0,
+                Decision::Fail,
+            ),
             (status(429, "request too large", Some(3)), 0, secs(3)),
             (SampleError::IdleTimeout(Duration::ZERO), 0, Decision::Fail),
             (
@@ -267,25 +287,38 @@ mod tests {
         };
         assert!(verdict(
             response(vec![call("{}")], ""),
-            LengthPolicy::CompleteToolCalls
+            LengthPolicy::CompleteToolCalls,
+            None
         )
         .is_ok());
         assert!(verdict(
             response(vec![call("{\"a\":")], ""),
-            LengthPolicy::CompleteToolCalls
+            LengthPolicy::CompleteToolCalls,
+            None
         )
         .is_err());
-        assert!(verdict(response(vec![call("{}")], ""), LengthPolicy::Fail).is_err());
+        assert!(verdict(response(vec![call("{}")], ""), LengthPolicy::Fail, None).is_err());
         let kept = verdict(
             response(vec![call("{")], "hi"),
             LengthPolicy::CompletePartial,
+            None,
         )
         .unwrap();
         assert!(kept.tool_calls.is_empty());
         assert_eq!(
-            verdict(Response::default(), LengthPolicy::Fail),
+            verdict(Response::default(), LengthPolicy::Fail, None),
             Err(SampleError::Empty {
                 reasoning_only: false
+            })
+        );
+        // The server filled the window and could not write anything.
+        let mut full = response(vec![], "");
+        full.usage.prompt = 1000;
+        assert_eq!(
+            verdict(full, LengthPolicy::CompletePartial, Some(1000)),
+            Err(SampleError::ContextOverflow {
+                input: 1000,
+                window: 1000
             })
         );
     }

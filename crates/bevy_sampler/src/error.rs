@@ -39,7 +39,8 @@ pub enum SampleError {
         message: String,
         /// Error code or type from the body.
         code: Option<String>,
-        /// The `Retry-After` header, capped at two minutes.
+        /// How long the server asked us to wait, from `retry-after-ms` or
+        /// `Retry-After`.
         retry_after: Option<Duration>,
         /// The `x-should-retry` header.
         should_retry: Option<bool>,
@@ -73,16 +74,51 @@ pub enum SampleError {
         /// The signals that fired.
         triggers: Vec<String>,
     },
+    /// The input filled the context window, but the server did not say so. It
+    /// either reported more input tokens than fit, or stopped at the output
+    /// limit without writing anything.
+    #[error("{input} input tokens overflow the {window}-token context window")]
+    ContextOverflow {
+        /// Input tokens the server reported.
+        input: u64,
+        /// The model's context window.
+        window: u64,
+    },
 }
 
 const CONTEXT_CODES: [&str; 2] = ["context_length_exceeded", "exceed_context_size_error"];
-const CONTEXT_PHRASES: [&str; 5] = [
-    "prompt is too long",
-    "maximum context length",
-    "too long for this model",
-    "maximum prompt length",
-    "request too large",
+/// How providers say that the conversation no longer fits, in lowercase.
+const CONTEXT_PHRASES: &[&str] = &[
+    "prompt is too long",                     // Anthropic
+    "prompt too long",                        // z.ai, Ollama
+    "prompt exceeds max length",              // z.ai
+    "request too large",                      // Anthropic
+    "input is too long for requested model",  // Bedrock
+    "exceeds the context window",             // OpenAI
+    "maximum context length",                 // OpenAI-compatible, OpenRouter, Mistral
+    "context window exceeded",                // LiteLLM
+    "exceeds the maximum number of tokens",   // Google
+    "maximum prompt length",                  // xAI
+    "too long for this model",                // xAI
+    "reduce the length of the messages",      // Groq
+    "maximum allowed input length",           // OpenRouter
+    "longer than the model's context length", // Together
+    "exceeds the limit of",                   // GitHub Copilot
+    "exceeds the available context size",     // llama.cpp
+    "greater than the context length",        // LM Studio
+    "context window exceeds limit",           // MiniMax
+    "exceeded model token limit",             // Kimi
+    "but the configured context size is",     // DS4
+    "model_context_window_exceeded",          // z.ai
+    "range of input length should be",        // Qwen
+    "context length exceeded",                // generic
+    "context_length_exceeded",                // generic
+    "too many tokens",                        // generic
+    "token limit exceeded",                   // generic
 ];
+/// Rate limits that would otherwise match a phrase above, such as Bedrock's
+/// "Too many tokens, please wait".
+const NOT_CONTEXT_PHRASES: &[&str] = &["rate limit", "too many requests", "throttl"];
 const SIZE_CODES: [&str; 3] = ["413", "payload_too_large", "request_too_large"];
 /// Longest server text kept in an error, in bytes.
 const MAX_MESSAGE: usize = 2048;
@@ -122,23 +158,33 @@ impl SampleError {
         }
     }
 
-    /// Whether the same request might succeed later.
+    /// Whether the same request might succeed later. The server's
+    /// `x-should-retry` header wins over the status.
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Http { kind, .. } => *kind != HttpKind::Other,
-            Self::Status { status, .. } => {
-                *status == 429 || (*status >= 500 && !matches!(status, 525 | 526))
-            }
+            Self::Status {
+                status,
+                should_retry,
+                ..
+            } => should_retry.unwrap_or(
+                matches!(status, 408 | 409 | 429)
+                    || (*status >= 500 && !matches!(status, 525 | 526)),
+            ),
             Self::Stream { .. } | Self::Empty { .. } => true,
             _ => false,
         }
     }
 
-    /// The conversation no longer fits the model.
+    /// The conversation no longer fits the model. Compact it before trying again.
     pub fn is_context_length(&self) -> bool {
+        if let Self::ContextOverflow { .. } = self {
+            return true;
+        }
         let message = self.server_message().to_lowercase();
+        let mentions = |phrases: &[&str]| phrases.iter().any(|p| message.contains(p));
         self.code().is_some_and(|c| CONTEXT_CODES.contains(&c))
-            || CONTEXT_PHRASES.iter().any(|p| message.contains(p))
+            || (mentions(CONTEXT_PHRASES) && !mentions(NOT_CONTEXT_PHRASES))
     }
 
     /// The request body was too many bytes.

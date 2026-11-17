@@ -10,8 +10,8 @@ use bevy_tool::{ToolCall, ToolChoice};
 use serde_json::Value;
 
 use crate::{
-    error::clip, Backend, Delta, Reasoning, Request, Response, SampleError, SamplerSettings,
-    StopReason, Usage,
+    error::clip, Backend, CacheRetention, Delta, Reasoning, Request, Response, SampleError,
+    SamplerSettings, StopReason, Usage,
 };
 
 /// Something a backend learned from one event.
@@ -28,18 +28,23 @@ pub(crate) enum Chunk {
     ToolCallDone(u32, ToolCall),
     Hosted(Value),
     Usage(Usage),
-    Stop(StopReason),
+    /// Why the model stopped, and the provider's own word for it.
+    Stop(StopReason, String),
     DoomLoop(Vec<String>),
     Done,
 }
 
 pub(crate) fn encode(settings: &SamplerSettings, request: &Request) -> Value {
     let model = request.model.as_deref().unwrap_or(&settings.model);
-    match settings.backend {
-        Backend::ChatCompletions => chat::encode(model, request),
+    let mut body = match settings.backend {
+        Backend::ChatCompletions => chat::encode(model, request, &settings.chat),
         Backend::Responses => responses::encode(model, request),
         Backend::Messages => messages::encode(model, request),
+    };
+    for (key, value) in &request.extra {
+        body[key] = value.clone();
     }
+    body
 }
 
 /// Decoding state for one stream.
@@ -117,8 +122,8 @@ impl Builder {
             Chunk::ToolCallDone(index, done) => *self.call(index) = done,
             Chunk::Hosted(item) => response.hosted.push(item),
             Chunk::Usage(usage) => response.usage.merge(usage),
-            Chunk::Stop(stop) => {
-                response.stop_reason = stop;
+            Chunk::Stop(stop, raw) => {
+                (response.stop_reason, response.raw_stop_reason) = (stop, raw);
                 self.stopped = true;
             }
             Chunk::Done => self.done = true,
@@ -145,7 +150,19 @@ impl Builder {
             });
         }
         self.calls.sort_by_key(|(index, _)| *index);
-        response.tool_calls = self.calls.into_iter().map(|(_, call)| call).collect();
+        response.tool_calls = self
+            .calls
+            .into_iter()
+            .map(|(_, mut call)| {
+                if !is_json(&call.arguments) {
+                    let repaired = repair_json(&call.arguments);
+                    if is_json(&repaired) {
+                        call.arguments = repaired;
+                    }
+                }
+                call
+            })
+            .collect();
         if response.stop_reason == StopReason::Stop && !response.tool_calls.is_empty() {
             response.stop_reason = StopReason::ToolCalls;
         }
@@ -164,8 +181,63 @@ fn put(body: &mut Value, key: &str, value: Option<impl Into<Value>>) {
     }
 }
 
+/// The prompt cache fields of Chat Completions and Responses.
+fn openai_cache(body: &mut Value, request: &Request) {
+    if request.cache != CacheRetention::Off {
+        put(body, "prompt_cache_key", request.prompt_cache_key.clone());
+    }
+    if request.cache == CacheRetention::Long {
+        body["prompt_cache_retention"] = "24h".into();
+    }
+}
+
 fn text(value: &Value) -> Option<String> {
     value.as_str().map(Into::into)
+}
+
+fn is_json(text: &str) -> bool {
+    serde_json::from_str::<Value>(text).is_ok()
+}
+
+/// Fix two mistakes models make in JSON strings: raw control characters such
+/// as newlines, and backslashes before characters that cannot be escaped.
+fn repair_json(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut chars = json.chars();
+    while let Some(c) = chars.next() {
+        if !in_string || c == '"' {
+            in_string ^= c == '"';
+            out.push(c);
+            continue;
+        }
+        match c {
+            '\\' => {
+                let rest = chars.as_str();
+                let escaped = rest.chars().next().filter(|&next| match next {
+                    'u' => rest
+                        .get(1..5)
+                        .is_some_and(|hex| hex.chars().all(|h| h.is_ascii_hexdigit())),
+                    next => "\"\\/bfnrt".contains(next),
+                });
+                out.push('\\');
+                match escaped {
+                    Some(next) => {
+                        out.push(next);
+                        chars.next();
+                    }
+                    // A lone backslash: escape it.
+                    None => out.push('\\'),
+                }
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < ' ' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn count(value: &Value) -> u64 {
@@ -190,5 +262,20 @@ fn openai_tool_choice(choice: &ToolChoice, function: impl Fn(&str) -> Value) -> 
         ToolChoice::None => "none".into(),
         ToolChoice::Required => "required".into(),
         ToolChoice::Function(name) => function(name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_json, repair_json};
+
+    #[test]
+    fn repairs_raw_newlines_and_bad_escapes() {
+        let broken = "{\"cmd\": \"echo a\nb \\d \\u00e9\", \"ok\": \"\\\"q\\\"\"}";
+        assert!(!is_json(broken));
+        let repaired = repair_json(broken);
+        let value: serde_json::Value = serde_json::from_str(&repaired).unwrap();
+        assert_eq!(value["cmd"], "echo a\nb \\d \u{e9}");
+        assert_eq!(value["ok"], "\"q\"");
     }
 }

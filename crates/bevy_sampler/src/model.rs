@@ -2,14 +2,17 @@
 //! from their wire formats, so game code never sees provider JSON. The tool
 //! types come from `bevy_tool`.
 
-use std::time::Duration;
+use std::{mem::take, time::Duration};
 
 use bevy_model::ModelInfo;
 use bevy_tool::{ToolCall, ToolChoice, ToolSpec};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Text that replaces an image when a request is retried without images.
 pub const IMAGE_REMOVED: &str = "[image removed]";
+
+/// The result sent for a tool call that has none, such as a cancelled call.
+pub const NO_RESULT: &str = "error: no result provided";
 
 /// One entry in a conversation.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +76,9 @@ pub struct Reasoning {
     /// Opaque proof needed to replay it: the Anthropic signature or the
     /// `OpenAI`/xAI `encrypted_content`.
     pub signature: Option<String>,
+    /// The model it was requested from. Reasoning is only sent back to that
+    /// model, since another model cannot verify its signature.
+    pub model: Option<String>,
 }
 
 /// What to do when the model hits its output limit.
@@ -99,6 +105,19 @@ pub enum StopReason {
     ToolCalls,
     /// The provider filtered the output.
     ContentFilter,
+}
+
+/// How long the provider keeps the prompt cache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CacheRetention {
+    /// Do not mark anything for caching, and skip
+    /// [`Request::prompt_cache_key`].
+    Off,
+    /// The provider's default, about five minutes.
+    #[default]
+    Short,
+    /// One hour for Anthropic, 24 hours for `OpenAI`.
+    Long,
 }
 
 /// Token accounting.
@@ -164,10 +183,15 @@ pub struct Request {
     pub json_schema: Option<Value>,
     /// Routes requests with the same key to the same prompt cache.
     pub prompt_cache_key: Option<String>,
+    /// How long the provider keeps the prompt cache.
+    pub cache: CacheRetention,
     /// What to do on [`StopReason::Length`].
     pub length_policy: LengthPolicy,
     /// Extra headers for this request only.
     pub headers: Vec<(String, String)>,
+    /// Extra fields for the request body, such as `top_k` or `min_p`. They
+    /// are added last and replace fields the sampler set.
+    pub extra: Map<String, Value>,
 }
 
 impl Request {
@@ -205,6 +229,46 @@ impl Request {
         }
         removed
     }
+
+    /// Fix a conversation that `model` would reject. This drops reasoning
+    /// from other models and gives every tool call a result, using
+    /// [`NO_RESULT`] for calls that have none. System items that land between
+    /// a call and its results move after the results.
+    pub(crate) fn repair(&mut self, model: &str) {
+        /// Answer the calls still waiting, then add the held system items.
+        fn settle(items: &mut Vec<Item>, waiting: &mut Vec<String>, held: &mut Vec<Item>) {
+            items.extend(waiting.drain(..).map(|call_id| Item::ToolResult {
+                call_id,
+                content: NO_RESULT.into(),
+                images: Vec::new(),
+            }));
+            items.append(held);
+        }
+
+        let mut items = Vec::with_capacity(self.items.len());
+        let mut waiting: Vec<String> = Vec::new();
+        let mut held = Vec::new();
+        for item in take(&mut self.items) {
+            match &item {
+                Item::Reasoning(r) if r.model.as_deref().is_some_and(|m| m != model) => continue,
+                Item::ToolResult { call_id, .. } => waiting.retain(|id| id != call_id),
+                Item::System(_) if !waiting.is_empty() => {
+                    held.push(item);
+                    continue;
+                }
+                _ => {
+                    // A new turn starts, so the previous calls need their results now.
+                    settle(&mut items, &mut waiting, &mut held);
+                    if let Item::Assistant { tool_calls, .. } = &item {
+                        waiting = tool_calls.iter().map(|c| c.id.clone()).collect();
+                    }
+                }
+            }
+            items.push(item);
+        }
+        settle(&mut items, &mut waiting, &mut held);
+        self.items = items;
+    }
 }
 
 /// A finished sample.
@@ -224,6 +288,8 @@ pub struct Response {
     pub hosted: Vec<Value>,
     /// Why the model stopped.
     pub stop_reason: StopReason,
+    /// The stop reason exactly as the provider sent it, such as `end_turn`.
+    pub raw_stop_reason: String,
     /// Token accounting.
     pub usage: Usage,
     /// Model limits reported in the response headers.
@@ -289,4 +355,50 @@ pub enum Delta {
         /// Whether it finished.
         done: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repair_answers_calls_and_drops_foreign_reasoning() {
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            ..Default::default()
+        };
+        let result = |id: &str, content: &str| Item::ToolResult {
+            call_id: id.into(),
+            content: content.into(),
+            images: Vec::new(),
+        };
+        let reasoning = |model: &str| {
+            Item::Reasoning(Reasoning {
+                model: Some(model.into()),
+                ..Default::default()
+            })
+        };
+        let mut request = Request::new(vec![
+            reasoning("other"),
+            Item::Assistant {
+                text: String::new(),
+                tool_calls: vec![call("a"), call("b")],
+            },
+            Item::system("held"),
+            result("a", "ok"),
+            reasoning("me"),
+            Item::user("next"),
+        ]);
+        request.repair("me");
+        assert_eq!(
+            request.items[1..5],
+            [
+                result("a", "ok"),
+                result("b", NO_RESULT),
+                Item::system("held"),
+                reasoning("me"),
+            ]
+        );
+        assert_eq!(request.items.len(), 6);
+    }
 }

@@ -54,6 +54,10 @@
 //! To cancel, remove [`SampleRequest`] or despawn the entity. To start over,
 //! insert a new [`SampleRequest`]; this also clears the old response or error.
 //!
+//! Before each attempt, the sampler fixes conversation problems the provider
+//! would reject. Reasoning from another model is dropped, and a tool call
+//! without a result gets [`NO_RESULT`].
+//!
 //! The app needs `TaskPoolPlugin`, which `DefaultPlugins` and `MinimalPlugins`
 //! already include.
 //!
@@ -75,10 +79,10 @@ mod settings;
 
 pub use error::{HttpKind, SampleError};
 pub use model::{
-    Delta, Item, LengthPolicy, Metrics, Part, Reasoning, Request, Response, StopReason, Usage,
-    IMAGE_REMOVED,
+    CacheRetention, Delta, Item, LengthPolicy, Metrics, Part, Reasoning, Request, Response,
+    StopReason, Usage, IMAGE_REMOVED, NO_RESULT,
 };
-pub use settings::{AuthScheme, Backend, DoomLoopPolicy, RetryPolicy, SamplerSettings};
+pub use settings::{AuthScheme, Backend, ChatCompat, DoomLoopPolicy, RetryPolicy, SamplerSettings};
 
 use core::hash::BuildHasher;
 use std::{
@@ -273,10 +277,13 @@ fn dispatch_samples(
             started: now,
         });
         state.attempts += 1;
+        let model = request.0.model.as_deref().unwrap_or(&settings.model);
+        let mut request = request.0.clone();
+        request.repair(model);
         let attempt = Attempt {
             client: client.get(settings),
             settings: settings.clone(),
-            request: request.0.clone(),
+            request,
             armed: settings.doom_loop.is_some() && !state.retry.disarmed,
         };
         commands
@@ -317,11 +324,23 @@ fn receive_samples(
         };
 
         let settings = custom.map_or(&*settings, |c| &c.0);
+        let requested = request.0.model.as_deref().unwrap_or(&settings.model);
+        let context_window = |response: &Response| {
+            let known = |model: &str| models.as_ref()?.get(model)?.context_window;
+            response
+                .model_info
+                .context_window
+                .or_else(|| known(&response.model))
+                .or_else(|| known(requested))
+        };
         // Check the reply, which may be cut off by the length limit, then decide
         // whether an error is retried or final.
         let result = outcome
             .result
-            .and_then(|response| retry::verdict(response, request.0.length_policy))
+            .and_then(|response| {
+                let window = context_window(&response);
+                retry::verdict(response, request.0.length_policy, window)
+            })
             .map_err(|error| {
                 let decision = retry::decide(
                     settings,

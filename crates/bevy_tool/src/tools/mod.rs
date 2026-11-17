@@ -50,7 +50,11 @@ where
     };
     let work = match serde_json::from_str(arguments) {
         Ok(args) => work(args),
-        Err(error) => return ToolOutput::text(format!("error: bad arguments: {error}")).into(),
+        Err(error) => {
+            let message =
+                format!("error: bad arguments: {error}\n\nReceived arguments:\n{arguments}");
+            return ToolOutput::text(truncate(message)).into();
+        }
     };
     IoTaskPool::get()
         .spawn(async move {

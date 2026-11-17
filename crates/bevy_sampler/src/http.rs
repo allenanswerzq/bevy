@@ -5,7 +5,7 @@
 use std::{
     mem::{replace, take},
     str::FromStr,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use async_io::Timer;
@@ -25,8 +25,6 @@ use crate::{
 
 /// Request bodies at least this big are compressed when [`SamplerSettings::compress`] is on.
 const COMPRESS_MIN: usize = 64 * 1024;
-/// The longest `retry-after` we honor.
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
 /// Repeated runs this many tokens long count as a loop.
 const EXACT_REPETITION_TOKENS: u64 = 64;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -90,14 +88,22 @@ pub(crate) async fn run(attempt: Attempt, mut emit: impl FnMut(Delta)) -> Outcom
     })
     .await;
     let (result, partial) = match streamed {
-        Ok((model_info, models_etag)) => (
-            Ok(Response {
+        Ok((model_info, models_etag)) => {
+            let mut response = Response {
                 model_info,
                 models_etag,
                 ..builder.finish()
-            }),
-            String::new(),
-        ),
+            };
+            let model = attempt
+                .request
+                .model
+                .as_ref()
+                .unwrap_or(&attempt.settings.model);
+            for reasoning in &mut response.reasoning {
+                reasoning.model = Some(model.clone());
+            }
+            (Ok(response), String::new())
+        }
         Err(error) => (Err(error), builder.response.text),
     };
     Outcome {
@@ -301,9 +307,24 @@ fn parse_status_error(status: u16, headers: &HeaderMap, body: String) -> SampleE
                 .unwrap_or(body),
         ),
         code: field(error, "code").or_else(|| field(error, "type")),
-        retry_after: header::<u64>(headers, RETRY_AFTER.as_str())
-            .map(|secs| Duration::from_secs(secs).min(MAX_RETRY_AFTER)),
+        retry_after: retry_after(headers),
         should_retry: header(headers, "x-should-retry"),
+    }
+}
+
+/// How long the server asks us to wait: `retry-after-ms`, or `Retry-After` in
+/// seconds or as a date.
+fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    if let Some(millis) = header::<f64>(headers, "retry-after-ms") {
+        return Duration::try_from_secs_f64(millis / 1000.0).ok();
+    }
+    let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
+    match value.parse::<f64>() {
+        Ok(secs) => Duration::try_from_secs_f64(secs).ok(),
+        Err(_) => {
+            let at = httpdate::parse_http_date(value).ok()?;
+            Some(at.duration_since(SystemTime::now()).unwrap_or_default())
+        }
     }
 }
 

@@ -63,6 +63,9 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
     /// Backoff cap.
     pub max_delay: Duration,
+    /// Fail right away when the server asks to wait longer than this. The
+    /// error keeps the wait it asked for.
+    pub max_server_delay: Duration,
 }
 
 impl Default for RetryPolicy {
@@ -73,6 +76,33 @@ impl Default for RetryPolicy {
             only_before_output: false,
             base_delay: Duration::from_secs(2),
             max_delay: Duration::from_secs(30),
+            max_server_delay: Duration::from_secs(60),
+        }
+    }
+}
+
+/// Differences between servers that speak [`Backend::ChatCompletions`]. The
+/// defaults match `OpenAI`; older and local servers may need changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatCompat {
+    /// Field for the output limit: `max_completion_tokens` or the older
+    /// `max_tokens`.
+    pub max_tokens_field: &'static str,
+    /// Send system items with the `developer` role instead of `system`.
+    pub developer_role: bool,
+    /// Send `reasoning_effort`. Some servers reject the field.
+    pub reasoning_effort: bool,
+    /// Ask for token usage at the end of the stream.
+    pub stream_usage: bool,
+}
+
+impl Default for ChatCompat {
+    fn default() -> Self {
+        Self {
+            max_tokens_field: "max_completion_tokens",
+            developer_role: false,
+            reasoning_effort: true,
+            stream_usage: true,
         }
     }
 }
@@ -127,6 +157,8 @@ pub struct SamplerSettings {
     pub api_key: Option<String>,
     /// How the key is sent.
     pub auth: AuthScheme,
+    /// Server differences for [`Backend::ChatCompletions`].
+    pub chat: ChatCompat,
     /// Extra headers for every request.
     pub headers: Vec<(String, String)>,
     /// Extra query parameters for every request.
@@ -156,6 +188,7 @@ impl Default for SamplerSettings {
             model: String::new(),
             api_key: None,
             auth: AuthScheme::default(),
+            chat: ChatCompat::default(),
             headers: Vec::new(),
             query: Vec::new(),
             max_in_flight: 64,
@@ -183,6 +216,7 @@ impl fmt::Debug for SamplerSettings {
             .field("model", &self.model)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("auth", &self.auth)
+            .field("chat", &self.chat)
             .field("headers", &names(&self.headers))
             .field("query", &names(&self.query))
             .field("max_in_flight", &self.max_in_flight)

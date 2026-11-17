@@ -2,14 +2,19 @@
 
 use serde_json::{json, Value};
 
-use super::{count, openai_tool_choice, put, stream_error, text, Chunk};
-use crate::{Delta, Item, Part, Request, SampleError, StopReason, Usage};
+use super::{count, openai_cache, openai_tool_choice, put, stream_error, text, Chunk};
+use crate::{ChatCompat, Delta, Item, Part, Request, SampleError, StopReason, Usage};
 
-pub(super) fn encode(model: &str, request: &Request) -> Value {
+pub(super) fn encode(model: &str, request: &Request, compat: &ChatCompat) -> Value {
+    let system = if compat.developer_role {
+        "developer"
+    } else {
+        "system"
+    };
     let mut messages = Vec::new();
     for item in &request.items {
         match item {
-            Item::System(text) => messages.push(json!({"role": "system", "content": text})),
+            Item::System(text) => messages.push(json!({"role": system, "content": text})),
             Item::User(parts) => messages.push(json!({"role": "user", "content": content(parts)})),
             Item::Assistant { text, tool_calls } => {
                 let mut message = json!({"role": "assistant", "content": text});
@@ -47,8 +52,10 @@ pub(super) fn encode(model: &str, request: &Request) -> Value {
         "model": model,
         "messages": messages,
         "stream": true,
-        "stream_options": {"include_usage": true},
     });
+    if compat.stream_usage {
+        body["stream_options"] = json!({"include_usage": true});
+    }
     if !request.tools.is_empty() {
         body["tools"] = request
             .tools
@@ -71,21 +78,19 @@ pub(super) fn encode(model: &str, request: &Request) -> Value {
     }
     put(
         &mut body,
-        "max_completion_tokens",
+        compat.max_tokens_field,
         request.max_output_tokens,
     );
     put(&mut body, "temperature", request.temperature);
     put(&mut body, "top_p", request.top_p);
-    put(
-        &mut body,
-        "reasoning_effort",
-        request.reasoning_effort.clone(),
-    );
-    put(
-        &mut body,
-        "prompt_cache_key",
-        request.prompt_cache_key.clone(),
-    );
+    if compat.reasoning_effort {
+        put(
+            &mut body,
+            "reasoning_effort",
+            request.reasoning_effort.clone(),
+        );
+    }
+    openai_cache(&mut body, request);
     if let Some(schema) = &request.json_schema {
         body["response_format"] = json!({
             "type": "json_schema",
@@ -134,12 +139,13 @@ pub(super) fn decode(event: &Value, out: &mut Vec<Chunk>) -> Result<(), SampleEr
         }));
     }
     if let Some(reason) = choice["finish_reason"].as_str() {
-        out.push(Chunk::Stop(match reason {
+        let stop = match reason {
             "length" => StopReason::Length,
             "tool_calls" | "function_call" => StopReason::ToolCalls,
             "content_filter" => StopReason::ContentFilter,
             _ => StopReason::Stop,
-        }));
+        };
+        out.push(Chunk::Stop(stop, reason.into()));
     }
     let usage = &event["usage"];
     if usage.is_object() {
