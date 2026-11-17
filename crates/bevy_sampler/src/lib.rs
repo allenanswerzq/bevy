@@ -399,6 +399,7 @@ fn learn(models: &mut ResMut<Models>, response: &Response) {
     let info = ModelInfo {
         context_window: reported.context_window.or(known.context_window),
         max_output_tokens: reported.max_output_tokens.or(known.max_output_tokens),
+        ..known.clone()
     };
     if info != known {
         models.insert(response.model.clone(), info);

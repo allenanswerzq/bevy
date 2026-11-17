@@ -1,13 +1,27 @@
 //! The models an app can use, registered as Bevy data.
 //!
 //! [`ModelPlugin`] adds the [`Models`] resource, which maps each model id to
-//! what is known about it, such as its context window. Register models up
-//! front with [`ModelApp::register_model`]. A sampler can also fill in limits
-//! as responses report them, and other systems read them, for example to decide
-//! when a conversation needs to be shortened.
+//! what is known about it in a [`ModelInfo`], such as its context window,
+//! prices, and thinking levels. Register models up front with
+//! [`ModelApp::register_model`]. A sampler can also fill in limits as responses
+//! report them, and other systems read them, for example to decide when a
+//! conversation needs to be shortened.
 //!
-//! [`DefaultModels`] adds the registry together with the models this crate
-//! knows about. Each provider is its own plugin, so you can leave one out:
+//! Every provider in pi's model catalog has a plugin that registers the models
+//! it serves, such as [`AnthropicModelsPlugin`] or [`OpenRouterModelsPlugin`].
+//! Add the one for the provider your app talks to:
+//!
+//! ```
+//! use bevy_app::App;
+//! use bevy_model::{AnthropicModelsPlugin, ModelPlugin, Models};
+//!
+//! let mut app = App::new();
+//! app.add_plugins((ModelPlugin, AnthropicModelsPlugin));
+//! assert!(app.world().resource::<Models>().get("claude-opus-5").is_some());
+//! ```
+//!
+//! [`DefaultModels`] adds the registry with xAI's models, since xAI is the
+//! default endpoint of `bevy_sampler`. Its plugins can be left out:
 //!
 //! ```
 //! use bevy_app::{App, PluginGroup};
@@ -33,22 +47,27 @@
 //!     ModelInfo {
 //!         context_window: Some(128_000),
 //!         max_output_tokens: Some(16_000),
+//!         ..Default::default()
 //!     },
 //! );
 //! let models = app.world().resource::<Models>();
 //! assert_eq!(models.get("my-model").unwrap().context_window, Some(128_000));
 //! ```
 
-mod xai;
+extern crate alloc;
 
-pub use xai::XaiModelsPlugin;
+mod info;
+mod providers;
+
+pub use info::*;
+pub use providers::*;
 
 use bevy_app::{plugin_group, App, Plugin};
 use bevy_ecs::prelude::*;
 use bevy_platform::collections::HashMap;
 
 plugin_group! {
-    /// The model registry and every model this crate knows about:
+    /// The model registry and xAI's models, the sampler's default provider:
     #[derive(Default)]
     pub struct DefaultModels {
         :ModelPlugin,
@@ -90,15 +109,6 @@ impl Models {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &ModelInfo)> {
         self.models.iter().map(|(id, info)| (id.as_str(), info))
     }
-}
-
-/// Limits of one model.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModelInfo {
-    /// Context window in tokens.
-    pub context_window: Option<u64>,
-    /// Largest allowed output in tokens.
-    pub max_output_tokens: Option<u64>,
 }
 
 /// Registers models on an [`App`].

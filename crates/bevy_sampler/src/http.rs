@@ -336,6 +336,7 @@ fn metadata(headers: &HeaderMap) -> (ModelInfo, Option<String>) {
     let info = ModelInfo {
         context_window: header(headers, "x-grok-context-window"),
         max_output_tokens: header(headers, "x-grok-max-completion-tokens"),
+        ..ModelInfo::default()
     };
     (info, header(headers, "x-models-etag"))
 }
