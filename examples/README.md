@@ -40,6 +40,7 @@ git checkout v0.4.0
 - [Cross-Platform Examples](#cross-platform-examples)
   - [2D Rendering](#2d-rendering)
   - [3D Rendering](#3d-rendering)
+  - [AI](#ai)
   - [Animation](#animation)
   - [Application](#application)
   - [Assets](#assets)
@@ -208,6 +209,13 @@ Example | Description
 [Visibility range](../examples/3d/visibility_range.rs) | Demonstrates visibility ranges
 [Volumetric fog](../examples/3d/volumetric_fog.rs) | Demonstrates volumetric fog and lighting
 [Wireframe](../examples/3d/wireframe.rs) | Showcases wireframe rendering
+
+### AI
+
+Example | Description
+--- | ---
+[Agent Loop](../examples/ai/agent.rs) | A tiny coding agent: sessions, model turns, and tool calls as entities and components
+[LLM Chat](../examples/ai/chat.rs) | Stream one reply from an LLM endpoint with bevy_sampler
 
 ### Animation
 

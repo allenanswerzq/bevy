@@ -809,6 +809,7 @@ bevy_image = { path = "crates/bevy_image", version = "0.20.0-dev", default-featu
 bevy_reflect = { path = "crates/bevy_reflect", version = "0.20.0-dev", default-features = false }
 bevy_render = { path = "crates/bevy_render", version = "0.20.0-dev", default-features = false }
 bevy-settings = { path = "crates/bevy_settings", version = "0.20.0-dev", default-features = false }
+bevy_sampler = { path = "crates/bevy_sampler" }
 bevy_state = { path = "crates/bevy_state", version = "0.20.0-dev", default-features = false }
 bevy_scene = { path = "crates/bevy_scene", version = "0.20.0-dev", default-features = false }
 # Needed to poll Task examples
@@ -1765,6 +1766,29 @@ doc-scrape-examples = true
 
 [package.metadata.example.no_prepass]
 hidden = true
+
+# AI
+[[example]]
+name = "agent"
+path = "examples/ai/agent.rs"
+doc-scrape-examples = true
+
+[package.metadata.example.agent]
+name = "Agent Loop"
+description = "A tiny coding agent: sessions, model turns, and tool calls as entities and components"
+category = "AI"
+wasm = false
+
+[[example]]
+name = "chat"
+path = "examples/ai/chat.rs"
+doc-scrape-examples = true
+
+[package.metadata.example.chat]
+name = "LLM Chat"
+description = "Stream one reply from an LLM endpoint with bevy_sampler"
+category = "AI"
+wasm = false
 
 # Animation
 [[example]]
