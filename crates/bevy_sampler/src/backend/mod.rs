@@ -6,11 +6,12 @@ mod chat;
 mod messages;
 mod responses;
 
+use bevy_tool::{ToolCall, ToolChoice};
 use serde_json::Value;
 
 use crate::{
     error::clip, Backend, Delta, Reasoning, Request, Response, SampleError, SamplerSettings,
-    StopReason, ToolCall, ToolChoice, Usage,
+    StopReason, Usage,
 };
 
 /// Something a backend learned from one event.

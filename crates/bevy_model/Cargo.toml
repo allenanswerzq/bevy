@@ -1,0 +1,18 @@
+[package]
+name = "bevy_model"
+version = "0.20.0-dev"
+edition = "2024"
+description = "A registry of the LLMs a Bevy app can use"
+homepage = "https://bevy.org"
+repository = "https://github.com/bevyengine/bevy"
+license = "MIT OR Apache-2.0"
+keywords = ["bevy", "llm", "agent"]
+publish = false
+
+[dependencies]
+bevy_app = { path = "../bevy_app", version = "0.20.0-dev" }
+bevy_ecs = { path = "../bevy_ecs", version = "0.20.0-dev" }
+bevy_platform = { path = "../bevy_platform", version = "0.20.0-dev" }
+
+[lints]
+workspace = true

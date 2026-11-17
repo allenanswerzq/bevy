@@ -1,8 +1,11 @@
-//! Provider-neutral conversation types. Backends translate these to and from
-//! their wire formats, so game code only ever sees this module.
+//! What goes into a sample and what comes out. Backends translate these to and
+//! from their wire formats, so game code never sees provider JSON. The tool
+//! types come from `bevy_tool`.
 
 use std::time::Duration;
 
+use bevy_model::ModelInfo;
+use bevy_tool::{ToolCall, ToolChoice, ToolSpec};
 use serde_json::Value;
 
 /// Text that replaces an image when a request is retried without images.
@@ -58,42 +61,6 @@ pub enum Part {
     Text(String),
     /// An image URL or `data:` URL.
     Image(String),
-}
-
-/// A tool call made by the model.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ToolCall {
-    /// Id that the matching [`Item::ToolResult`] refers to.
-    pub id: String,
-    /// Tool name.
-    pub name: String,
-    /// Arguments as a JSON string.
-    pub arguments: String,
-}
-
-/// A function the model may call.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ToolSpec {
-    /// Tool name.
-    pub name: String,
-    /// What the tool does, for the model.
-    pub description: String,
-    /// JSON schema of the arguments.
-    pub parameters: Value,
-}
-
-/// Whether and which tools the model must call.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum ToolChoice {
-    /// The model decides.
-    #[default]
-    Auto,
-    /// No tool calls.
-    None,
-    /// At least one tool call.
-    Required,
-    /// Call this tool.
-    Function(String),
 }
 
 /// Model reasoning.
@@ -259,8 +226,10 @@ pub struct Response {
     pub stop_reason: StopReason,
     /// Token accounting.
     pub usage: Usage,
-    /// Model limits reported in response headers.
-    pub metadata: ModelMetadata,
+    /// Model limits reported in the response headers.
+    pub model_info: ModelInfo,
+    /// Version of the server's model list, from the `x-models-etag` header.
+    pub models_etag: Option<String>,
     /// Timing of the whole sample, retries included.
     pub metrics: Metrics,
 }
@@ -280,17 +249,6 @@ impl Response {
             .chain([assistant])
             .collect()
     }
-}
-
-/// Model limits from the `x-grok-*` and `x-models-etag` response headers.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModelMetadata {
-    /// Context window in tokens.
-    pub context_window: Option<u64>,
-    /// Largest allowed output in tokens.
-    pub max_completion_tokens: Option<u64>,
-    /// Version of the server's model list.
-    pub models_etag: Option<String>,
 }
 
 /// Timing of a sample.

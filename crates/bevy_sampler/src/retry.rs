@@ -153,8 +153,10 @@ pub(crate) fn verdict(
 
 #[cfg(test)]
 mod tests {
+    use bevy_tool::ToolCall;
+
     use super::*;
-    use crate::{DoomLoopPolicy, HttpKind, Part, ToolCall};
+    use crate::{DoomLoopPolicy, HttpKind, Part};
 
     fn status(status: u16, message: &str, retry_after: Option<u64>) -> SampleError {
         SampleError::Status {

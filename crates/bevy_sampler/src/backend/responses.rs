@@ -1,9 +1,10 @@
 //! `POST /responses`.
 
+use bevy_tool::ToolCall;
 use serde_json::{json, Value};
 
 use super::{count, openai_tool_choice, put, stream_error, text, Chunk};
-use crate::{Delta, Item, Part, Reasoning, Request, SampleError, StopReason, ToolCall, Usage};
+use crate::{Delta, Item, Part, Reasoning, Request, SampleError, StopReason, Usage};
 
 pub(super) fn encode(model: &str, request: &Request) -> Value {
     let message =
@@ -238,11 +239,12 @@ fn doom_loop(check: &Value, out: &mut Vec<Chunk>) {
 
 #[cfg(test)]
 mod tests {
+    use bevy_tool::ToolCall;
     use serde_json::json;
 
     use crate::{
         backend::{encode, Builder, Chunk, Decoder},
-        Backend, Item, Reasoning, Request, SamplerSettings, StopReason, ToolCall,
+        Backend, Item, Reasoning, Request, SamplerSettings, StopReason,
     };
 
     #[test]

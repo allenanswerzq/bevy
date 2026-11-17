@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_io::Timer;
+use bevy_model::ModelInfo;
 use bevy_tasks::futures_lite::future;
 use reqwest::{
     header::{HeaderMap, ACCEPT, CONTENT_ENCODING, CONTENT_TYPE, RETRY_AFTER},
@@ -19,7 +20,7 @@ use serde_json::Value;
 use crate::{
     backend::{self, Builder, Chunk, Decoder},
     error::clip,
-    Backend, Delta, ModelMetadata, Request, Response, SampleError, SamplerSettings,
+    Backend, Delta, Request, Response, SampleError, SamplerSettings,
 };
 
 /// Request bodies at least this big are compressed when [`SamplerSettings::compress`] is on.
@@ -89,9 +90,10 @@ pub(crate) async fn run(attempt: Attempt, mut emit: impl FnMut(Delta)) -> Outcom
     })
     .await;
     let (result, partial) = match streamed {
-        Ok(metadata) => (
+        Ok((model_info, models_etag)) => (
             Ok(Response {
-                metadata,
+                model_info,
+                models_etag,
                 ..builder.finish()
             }),
             String::new(),
@@ -107,12 +109,12 @@ pub(crate) async fn run(attempt: Attempt, mut emit: impl FnMut(Delta)) -> Outcom
 }
 
 /// Send the request and feed the reply into `builder`. Returns the model
-/// metadata from the response headers.
+/// limits and model list version from the response headers.
 async fn stream(
     attempt: &Attempt,
     builder: &mut Builder,
     emit: &mut impl FnMut(Delta),
-) -> Result<ModelMetadata, SampleError> {
+) -> Result<(ModelInfo, Option<String>), SampleError> {
     let settings = &attempt.settings;
     let mut idle = Idle::new(settings.idle_timeout);
 
@@ -309,12 +311,12 @@ fn field(json: &Value, key: &str) -> Option<String> {
     Some(json.get(key)?.as_str()?.to_owned())
 }
 
-fn metadata(headers: &HeaderMap) -> ModelMetadata {
-    ModelMetadata {
+fn metadata(headers: &HeaderMap) -> (ModelInfo, Option<String>) {
+    let info = ModelInfo {
         context_window: header(headers, "x-grok-context-window"),
-        max_completion_tokens: header(headers, "x-grok-max-completion-tokens"),
-        models_etag: header(headers, "x-models-etag"),
-    }
+        max_output_tokens: header(headers, "x-grok-max-completion-tokens"),
+    };
+    (info, header(headers, "x-models-etag"))
 }
 
 /// Parse a header value, ignoring surrounding whitespace.

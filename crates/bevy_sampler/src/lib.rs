@@ -56,6 +56,15 @@
 //!
 //! The app needs `TaskPoolPlugin`, which `DefaultPlugins` and `MinimalPlugins`
 //! already include.
+//!
+//! # Related crates
+//!
+//! The tool types come from `bevy_tool`. Fill [`Request::tools`] from
+//! [`Tools::specs`](bevy_tool::Tools::specs) to offer the registered tools.
+//! [`DefaultTools`](bevy_tool::DefaultTools) registers the built-in tools,
+//! and [`DefaultModels`](bevy_model::DefaultModels) registers the known models.
+//! If the app has [`ModelPlugin`](bevy_model::ModelPlugin), each response also
+//! records the model limits it reports in [`Models`].
 
 mod backend;
 mod error;
@@ -66,8 +75,8 @@ mod settings;
 
 pub use error::{HttpKind, SampleError};
 pub use model::{
-    Delta, Item, LengthPolicy, Metrics, ModelMetadata, Part, Reasoning, Request, Response,
-    StopReason, ToolCall, ToolChoice, ToolSpec, Usage, IMAGE_REMOVED,
+    Delta, Item, LengthPolicy, Metrics, Part, Reasoning, Request, Response, StopReason, Usage,
+    IMAGE_REMOVED,
 };
 pub use settings::{AuthScheme, Backend, DoomLoopPolicy, RetryPolicy, SamplerSettings};
 
@@ -80,6 +89,7 @@ use std::{
 use async_compat::Compat;
 use bevy_app::{App, Plugin, PostUpdate, PreStartup, PreUpdate};
 use bevy_ecs::prelude::*;
+use bevy_model::{ModelInfo, Models};
 use bevy_tasks::{futures::check_ready, IoTaskPool, Task};
 use reqwest::Client;
 
@@ -280,6 +290,7 @@ fn dispatch_samples(
 fn receive_samples(
     mut commands: Commands,
     settings: Res<SamplerSettings>,
+    mut models: Option<ResMut<Models>>,
     mut active: Query<(
         Entity,
         &mut Sampling,
@@ -332,6 +343,9 @@ fn receive_samples(
                     time_to_first_token: outcome.time_to_first_token,
                     duration: state.started.elapsed(),
                 };
+                if let Some(models) = &mut models {
+                    learn(models, &response);
+                }
                 entity_commands
                     .insert(SampleResponse(response))
                     .remove::<SampleRequest>();
@@ -354,6 +368,24 @@ fn receive_samples(
                     .remove::<SampleRequest>();
             }
         }
+    }
+}
+
+/// Record the model limits a response reported. A limit the response leaves
+/// out keeps its registered value. [`Models`] is only marked changed when
+/// something is new.
+fn learn(models: &mut ResMut<Models>, response: &Response) {
+    let known = models.get(&response.model).cloned().unwrap_or_default();
+    let reported = &response.model_info;
+    let info = ModelInfo {
+        context_window: reported.context_window.or(known.context_window),
+        max_output_tokens: reported.max_output_tokens.or(known.max_output_tokens),
+    };
+    if info != known {
+        models.insert(response.model.clone(), info);
+    }
+    if response.models_etag.is_some() && models.etag != response.models_etag {
+        models.etag.clone_from(&response.models_etag);
     }
 }
 

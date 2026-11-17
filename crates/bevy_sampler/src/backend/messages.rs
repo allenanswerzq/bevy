@@ -1,9 +1,10 @@
 //! `POST /messages` (Anthropic).
 
+use bevy_tool::ToolChoice;
 use serde_json::{json, Value};
 
 use super::{count, stream_error, text, Chunk};
-use crate::{Delta, Item, Part, Reasoning, Request, SampleError, StopReason, ToolChoice, Usage};
+use crate::{Delta, Item, Part, Reasoning, Request, SampleError, StopReason, Usage};
 
 const DEFAULT_MAX_TOKENS: u64 = 128_000;
 
@@ -302,11 +303,12 @@ fn usage(usage: &Value) -> Usage {
 
 #[cfg(test)]
 mod tests {
+    use bevy_tool::ToolCall;
     use serde_json::json;
 
     use crate::{
         backend::{encode, Builder, Decoder},
-        Backend, Item, Reasoning, Request, SamplerSettings, StopReason, ToolCall,
+        Backend, Item, Reasoning, Request, SamplerSettings, StopReason,
     };
 
     #[test]
